@@ -55,7 +55,7 @@ __device__ void triArray(float *a, const int size){
     }
 }
 
-__global__ void medianFilter(float*input, float *outputData,int width,int height){
+__device__ void medianFilter(float *outputData,int width,int height){
     // calculate normalized texture coordinates
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
@@ -69,7 +69,7 @@ __global__ void medianFilter(float*input, float *outputData,int width,int height
         int index = 0;
         for(int i = -1; i < 2; i++){
             for(int j = -1; j < 2; j++){
-                values[index] = input[(y+j)*width + (x+i)];
+                values[index] = outputData[(y+j)*width + (x+i)];
                 index++;
             }
         }
@@ -81,7 +81,7 @@ __global__ void medianFilter(float*input, float *outputData,int width,int height
     outputData[y*width + x] = values[4];
 }
 
-__global__ void dispersionFilter(float *outputData, int width, int height){
+__device__ void dispersionFilter(float *outputData, int width, int height){
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
     int acom[3] = {-1,0,1};
@@ -90,6 +90,13 @@ __global__ void dispersionFilter(float *outputData, int width, int height){
     float u = x * xstep, v = y * ystep;
 
     outputData[y*width + x] = tex2D(tex, u+xstep*acom[threadIdx.x%3], v+ystep*acom[threadIdx.y%3]);
+}
+
+__global__ void applyFilters(float *outputData, int width, int height){
+    dispersionFilter(outputData, width, height);
+    __syncthreads();
+    medianFilter(outputData, width, height);
+    __syncthreads();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -191,8 +198,7 @@ void runTest(int argc, char **argv){
     float *hOutputData = (float *) malloc(size);
 
     // Execute the kernel
-    dispersionFilter<<<dimGrid, dimBlock, 0>>>(dData, width, height);
-    medianFilter<<<dimGrid, dimBlock, 0>>>(dData, iData, width, height);
+    applyFilters<<<dimGrid, dimBlock, 0>>>(dData, width, height);
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");

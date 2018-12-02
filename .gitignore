@@ -6,6 +6,7 @@
 
 #data files
 *.pgm
+*.jpg
 
 #excutable file
 simpleTexture
