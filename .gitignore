@@ -1,0 +1,11 @@
+#obj files
+*.o
+
+#xml files
+*.xml
+
+#data files
+*.pgm
+
+#excutable file
+simpleTexture
