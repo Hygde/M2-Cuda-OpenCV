@@ -81,22 +81,56 @@ __device__ void medianFilter(float *outputData,int width,int height){
     outputData[y*width + x] = values[4];
 }
 
+__device__ void sobelFilter(float *input, float*outputData, int width, int height){
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+
+    if(x > 0 && x < width-1 && y > 0 && y < height -1){
+        char sobel_x[9] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
+        char sobel_y[9] = {-1, -2, -1, 0, 0, 0, 1, 2, 1};
+        float pixel_x = 0.0, pixel_y = 0.0;
+        int index = 0;
+        for(int i = -1; i < 2; i++){
+            for(int j = -1; j < 2; j++){
+                pixel_x += input[(y+j)*width + (x+i)] * sobel_x[index];
+                pixel_y += input[(y+j)*width + (x+i)] * sobel_y[index];
+                index++;
+            }
+        }
+        outputData[y*width + x] = sqrt( (pixel_x*pixel_x) + (pixel_y*pixel_y)); 
+    }
+}
+
+__device__ void multiply(float*input_1, float*output, int width, int height){
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+    output[y*width + x] *= input_1[y*width + x];
+}
+
 __device__ void dispersionFilter(float *outputData, int width, int height){
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int acom[3] = {-1,0,1};
-
+    
     float xstep = 1.0f / width, ystep = 1.0f / height;
     float u = x * xstep, v = y * ystep;
 
-    outputData[y*width + x] = tex2D(tex, u+xstep*acom[threadIdx.x%3], v+ystep*acom[threadIdx.y%3]);
+    if(x > 0 && y > 0){
+        outputData[y*width + x] = tex2D(tex, u+xstep*(-1), v+ystep*(-1));
+        outputData[(y-1)*width + x-1] = tex2D(tex, u+xstep, v+ystep);
+    }else{
+        outputData[y*width + x] = tex2D(tex, u+xstep*2, v+ystep*2);
+        outputData[(y+1)*width + x+1] = tex2D(tex, u+xstep, v+ystep);
+    }
 }
 
-__global__ void applyFilters(float *outputData, int width, int height){
+__global__ void applyFilters(float *input, float *outputData, int width, int height){
     dispersionFilter(outputData, width, height);
     __syncthreads();
     medianFilter(outputData, width, height);
     __syncthreads();
+    sobelFilter(outputData, input, width, height);//result of sobel in input
+    __syncthreads();
+    multiply(input, outputData, width, height);//multiply result of sobel with result of median
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -159,17 +193,10 @@ void runTest(int argc, char **argv){
     float *hDataRef = (float *) malloc(size);
     char *refPath = sdkFindFilePath(refFilename, argv[0]);
 
-    if (refPath == NULL){
-        printf("Unable to find reference image file: %s\n", refFilename);
-        exit(EXIT_FAILURE);
-    }
-
-    sdkLoadPGM(refPath, &hDataRef, &width, &height);
-
     // Allocate device memory for result
-    float *dData = NULL, *iData = NULL;
-    checkCudaErrors(cudaMalloc((void **) &dData, size));
-    checkCudaErrors(cudaMalloc((void **) &iData, size));
+    float *input_1 = NULL, *output = NULL;
+    checkCudaErrors(cudaMalloc((void **) &input_1, size));
+    checkCudaErrors(cudaMalloc((void **) &output, size));
 
     // Allocate array and copy image data
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
@@ -198,7 +225,7 @@ void runTest(int argc, char **argv){
     float *hOutputData = (float *) malloc(size);
 
     // Execute the kernel
-    applyFilters<<<dimGrid, dimBlock, 0>>>(dData, width, height);
+    applyFilters<<<dimGrid, dimBlock, 0>>>(input_1, output, width, height);
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
@@ -210,7 +237,7 @@ void runTest(int argc, char **argv){
     sdkDeleteTimer(&timer);
 
     // copy result from device to host
-    checkCudaErrors(cudaMemcpy(hOutputData,dData,size,cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(hOutputData,output, size,cudaMemcpyDeviceToHost));
 
     // Write result to file
     char outputFilename[1024];
@@ -219,10 +246,10 @@ void runTest(int argc, char **argv){
     sdkSavePGM(outputFilename, hOutputData, width, height);
     printf("Wrote '%s'\n", outputFilename);
 
-    checkCudaErrors(cudaFree(dData));
-    checkCudaErrors(cudaFree(iData));
+    checkCudaErrors(cudaFree(input_1));
+    checkCudaErrors(cudaFree(output));
+
     checkCudaErrors(cudaFreeArray(cuArray));
     free(imagePath);
-    free(refPath);
     free(hOutputData);
 }
