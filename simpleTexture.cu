@@ -114,13 +114,15 @@ __device__ void dispersionFilter(float *outputData, int width, int height){
     float xstep = 1.0f / width, ystep = 1.0f / height;
     float u = x * xstep, v = y * ystep;
 
-    if(x > 0 && y > 0){
-        outputData[y*width + x] = tex2D(tex, u+xstep*(-1), v+ystep*(-1));
-        outputData[(y-1)*width + x-1] = tex2D(tex, u+xstep, v+ystep);
-    }else{
-        outputData[y*width + x] = tex2D(tex, u+xstep*2, v+ystep*2);
-        outputData[(y+1)*width + x+1] = tex2D(tex, u+xstep, v+ystep);
-    }
+    if(x > 0 && y > 0 && x < width-1 && y < height-1){
+        if(x&y&1){//les deux valeurs sont paires
+            outputData[y*width+x] = tex2D(tex,u + xstep, v + ystep);
+            outputData[(y+1)*width+x+1] = tex2D(tex, u, v);
+        }else{
+            outputData[y*width+x] = tex2D(tex,u - xstep, v - ystep);
+            outputData[(y-1)*width+x-1] = tex2D(tex, u, v);
+        }
+    }else outputData[y*width+x] = tex2D(tex, u,v);
 }
 
 __global__ void applyFilters(float *input, float *outputData, int width, int height){
