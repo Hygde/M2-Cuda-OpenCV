@@ -86,13 +86,9 @@ __device__ void sobelFilter(unsigned char *input, unsigned char *outputData, int
                 index++;
             }
         }
-        float b = sqrt((b_pixel[0]*b_pixel[0])+(b_pixel[1]*b_pixel[1]));
-        float g = sqrt((g_pixel[0]*g_pixel[0])+(g_pixel[1]*g_pixel[1]));
-        float r = sqrt((r_pixel[0]*r_pixel[0])+(r_pixel[1]*r_pixel[1]));
-
-        outputData[3 * id + 0] = sqrt((b_pixel[0]*b_pixel[0])+(b_pixel[1]*b_pixel[1]));//(b>255)?255:b;
-        outputData[3 * id + 1] = sqrt((g_pixel[0]*g_pixel[0])+(g_pixel[1]*g_pixel[1]));//(g>255)?255:g;
-        outputData[3 * id + 2] = sqrt((r_pixel[0]*r_pixel[0])+(r_pixel[1]*r_pixel[1]));//(r>255)?255:r;
+        outputData[3 * id + 0] = sqrt((b_pixel[0]*b_pixel[0])+(b_pixel[1]*b_pixel[1])) > 128 ? 255 : 0;
+        outputData[3 * id + 1] = sqrt((g_pixel[0]*g_pixel[0])+(g_pixel[1]*g_pixel[1])) > 128 ? 255 : 0;
+        outputData[3 * id + 2] = sqrt((r_pixel[0]*r_pixel[0])+(r_pixel[1]*r_pixel[1])) > 128 ? 255 : 0;
     }
 }
 
@@ -101,9 +97,9 @@ __device__ void multiply(unsigned char*input_1, unsigned char*output, int width,
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
     unsigned int id = y * width + x;
 
-    output[3 * id + 0] *= input_1[3 * id + 0] / 255.0f;
-    output[3 * id + 1] *= input_1[3 * id + 1] / 255.0f;
-    output[3 * id + 2] *= input_1[3 * id + 2] / 255.0f;
+    output[3 * id + 0] *= input_1[3 * id + 0] / 255;
+    output[3 * id + 1] *= input_1[3 * id + 1] / 255;
+    output[3 * id + 2] *= input_1[3 * id + 2] / 255;
 }
 
 __device__ void dispersionFilter(unsigned char*input, unsigned char *outputData,char*commutation_array, int window, int width, int height){
@@ -121,7 +117,7 @@ __device__ void dispersionFilter(unsigned char*input, unsigned char *outputData,
 
 __global__ void applyFilters(unsigned char *input, unsigned char *outputData, char*commutation_array, int window,int width, int height){
     dispersionFilter(input, outputData,commutation_array, window, width, height);
-    /*__syncthreads();
+    __syncthreads();
     medianFilter(outputData, input, window, width, height);
     __syncthreads();
     sobelFilter(outputData, input, width, height);//result of sobel in input
@@ -134,22 +130,21 @@ void getCommutationArray(char* arr, int size, unsigned int window){for(int i = 0
 void sendDataToGpu(unsigned char* data, unsigned char*devData, unsigned char*devBuffer, char*com, char*devCom, int size){
     checkCudaErrors(cudaMemcpy(devData, data, 3*size*sizeof(char), cudaMemcpyHostToDevice));
     checkCudaErrors(cudaMemcpy(devBuffer, data, 3*size*sizeof(char), cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(devCom, com, (size+1)*sizeof(char), cudaMemcpyHostToDevice));
 }
 
 bool processEvent(bool&continuer, int&window){
     bool result;
     char carac = cv::waitKey(33);
     switch(carac){
-        case 32:
+        case 32://spacebar
             continuer = false;
         break;
-        case 82:
+        case 82://up
             window += 2;
             printf("window size = %dx%d \n",window, window);
         break;
-        case 84:
-            window = (window > 3)?window - 2: window;
+        case 84://down
+            window = (window > 3) ? window - 2 : window;
             printf("window size = %dx%d \n",window, window);
         break;
         default:result = false;break;
@@ -181,6 +176,7 @@ int main(int argc, char **argv){
         if(config){
             config = false;
             getCommutationArray(com, width*height+1, window);
+            checkCudaErrors(cudaMemcpy(devCom, com, (width*height+1)*sizeof(char), cudaMemcpyHostToDevice));
         }
         cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;
         sendDataToGpu(data, devData, devBuffer, com, devCom, width*height);
