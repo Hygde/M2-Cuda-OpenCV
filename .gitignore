@@ -6,6 +6,9 @@
 
 #data files
 *.pgm
+*.jpg
+*.tgz
+devals
 
 #excutable file
 simpleTexture

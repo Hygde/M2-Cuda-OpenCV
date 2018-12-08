@@ -8,6 +8,7 @@ todo:
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include <math.h>
 
@@ -55,41 +56,73 @@ __device__ void triArray(float *a, const int size){
     }
 }
 
-__global__ void medianFilter(float*input, float *outputData,int width,int height){
+__device__ void medianFilter(float*input, float *outputData,int width,int height){
     // calculate normalized texture coordinates
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-
-    //float u = x / (width - 0.0f);
-    //float v = y / (height - 0.0f);
-
     //to find the median -> tri à bulle + valeur du milieu
     float values[9];
     if(x > 0 && x < width-1 && y > 0 && y < height -1){
         int index = 0;
         for(int i = -1; i < 2; i++){
             for(int j = -1; j < 2; j++){
-                values[index] = input[(y+j)*width + (x+i)];
+                values[index] = input[(y+j)*width+(x+i)];
                 index++;
             }
         }
-    }
-
-    triArray(values, 9);
-
-    // read from texture and write to global memory
-    outputData[y*width + x] = values[4];
+        triArray(values, 9);
+        outputData[y*width + x] = values[4];
+    }else outputData[y*width + x] =  input[y*width + x];
 }
 
-__global__ void dispersionFilter(float *outputData, int width, int height){
+__device__ void sobelFilter(float *input, float*outputData, int width, int height){
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int acom[3] = {-1,0,1};
 
+    if(x > 0 && x < width-1 && y > 0 && y < height -1){
+        char sobel_x[9] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
+        char sobel_y[9] = {-1, -2, -1, 0, 0, 0, 1, 2, 1};
+        float pixel_x = 0.0, pixel_y = 0.0;
+        int index = 0;
+        for(int i = -1; i < 2; i++){
+            for(int j = -1; j < 2; j++){
+                pixel_x += input[(y+j)*width + (x+i)] * sobel_x[index];
+                pixel_y += input[(y+j)*width + (x+i)] * sobel_y[index];
+                index++;
+            }
+        }
+        outputData[y*width + x] = sqrt((pixel_x*pixel_x)+(pixel_y*pixel_y)); 
+    }
+}
+
+__device__ void multiply(float*input_1, float*output, int width, int height){
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+    output[y*width + x] *= input_1[y*width + x];
+}
+
+__device__ void dispersionFilter(float *outputData,char*commutation_array, int width, int height){
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+
+    unsigned int id = y*width+x;
+    
     float xstep = 1.0f / width, ystep = 1.0f / height;
     float u = x * xstep, v = y * ystep;
 
-    outputData[y*width + x] = tex2D(tex, u+xstep*acom[threadIdx.x%3], v+ystep*acom[threadIdx.y%3]);
+    if(x > 0 && y > 0 && x < width-1 && y < height-1){
+        outputData[id] = tex2D(tex, u+xstep*commutation_array[id], v+ystep*commutation_array[id+1]);
+    }else outputData[id] = tex2D(tex, u,v);
+}
+
+__global__ void applyFilters(float *input, float *outputData, char*commutation_array, int width, int height){
+    dispersionFilter(input,commutation_array, width, height);
+    __syncthreads();
+    medianFilter(input, outputData, width, height);
+    __syncthreads();
+    sobelFilter(outputData, input, width, height);//result of sobel in input
+    __syncthreads();
+    multiply(input, outputData, width, height);//multiply result of sobel with result of median*/
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -99,9 +132,9 @@ void runTest(int argc, char **argv);
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
 ////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv){
     printf("%s starting...\n", sampleName);
+    srand(time(NULL));
     // Process command-line arguments
     if (argc > 1)
     {
@@ -147,22 +180,24 @@ void runTest(int argc, char **argv){
 
     unsigned int size = width * height * sizeof(float);
     printf("Loaded '%s', %d x %d pixels\n", imageFilename, width, height);
+    dim3 dimBlock(8, 8, 1);
+    dim3 dimGrid(width / dimBlock.x, height / dimBlock.y, 1);
 
     //Load reference image from image (output)
     float *hDataRef = (float *) malloc(size);
     char *refPath = sdkFindFilePath(refFilename, argv[0]);
 
-    if (refPath == NULL){
-        printf("Unable to find reference image file: %s\n", refFilename);
-        exit(EXIT_FAILURE);
-    }
-
-    sdkLoadPGM(refPath, &hDataRef, &width, &height);
+    char *rindex = (char*) malloc((1+width*height)*sizeof(char));
+    for(int i = 0; i < width*height+1; i++){rindex[i] = rand()%3 - 1;}
 
     // Allocate device memory for result
-    float *dData = NULL, *iData = NULL;
-    checkCudaErrors(cudaMalloc((void **) &dData, size));
-    checkCudaErrors(cudaMalloc((void **) &iData, size));
+    char *commutation_array;
+    checkCudaErrors(cudaMalloc((void**) &commutation_array, (1+width*height)*sizeof(char)));
+    checkCudaErrors(cudaMemcpy(commutation_array, rindex, (1+width*height)*sizeof(char),cudaMemcpyHostToDevice));
+
+    float *input_1 = NULL, *output = NULL;
+    checkCudaErrors(cudaMalloc((void **) &input_1, size));
+    checkCudaErrors(cudaMalloc((void **) &output, size));
 
     // Allocate array and copy image data
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
@@ -179,9 +214,6 @@ void runTest(int argc, char **argv){
     // Bind the array to the texture
     checkCudaErrors(cudaBindTextureToArray(tex, cuArray, channelDesc));
 
-    dim3 dimBlock(8, 8, 1);
-    dim3 dimGrid(width / dimBlock.x, height / dimBlock.y, 1);
-
     checkCudaErrors(cudaDeviceSynchronize());
     StopWatchInterface *timer = NULL;
     sdkCreateTimer(&timer);
@@ -191,8 +223,7 @@ void runTest(int argc, char **argv){
     float *hOutputData = (float *) malloc(size);
 
     // Execute the kernel
-    dispersionFilter<<<dimGrid, dimBlock, 0>>>(dData, width, height);
-    medianFilter<<<dimGrid, dimBlock, 0>>>(dData, iData, width, height);
+    applyFilters<<<dimGrid, dimBlock, 0>>>(input_1, output, commutation_array, width, height);
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
@@ -204,7 +235,7 @@ void runTest(int argc, char **argv){
     sdkDeleteTimer(&timer);
 
     // copy result from device to host
-    checkCudaErrors(cudaMemcpy(hOutputData,dData,size,cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(hOutputData,output, size,cudaMemcpyDeviceToHost));
 
     // Write result to file
     char outputFilename[1024];
@@ -213,10 +244,12 @@ void runTest(int argc, char **argv){
     sdkSavePGM(outputFilename, hOutputData, width, height);
     printf("Wrote '%s'\n", outputFilename);
 
-    checkCudaErrors(cudaFree(dData));
-    checkCudaErrors(cudaFree(iData));
+    checkCudaErrors(cudaFree(commutation_array));
+    checkCudaErrors(cudaFree(input_1));
+    checkCudaErrors(cudaFree(output));
+
     checkCudaErrors(cudaFreeArray(cuArray));
+    free(rindex);
     free(imagePath);
-    free(refPath);
     free(hOutputData);
 }
