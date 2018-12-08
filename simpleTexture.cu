@@ -15,23 +15,13 @@ todo:
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <cuda.h>
-#include <curand.h>
-
-//#include opencv
-#include <opencv2/opencv.hpp>
 
 // Utilities and timing functions
 #include <helper_functions.h>    // includes cuda.h and cuda_runtime_api.h
-// CUDA helper functions
 #include <helper_cuda.h>         // helper functions for CUDA error check
 
-
-////////////////////////////////////////////////////////////////////////////////
-// Texture reference for 2D float texture
-texture<float, 2, cudaReadModeElementType> tex;
-
-// Auto-Verification Code
-bool testResult = true;
+//#include opencv
+#include <opencv2/opencv.hpp>
 
 __device__ void triArray(float *a, const int size){
     float tmp;
@@ -91,24 +81,26 @@ __device__ void multiply(float*input_1, float*output, int width, int height){
     output[y*width + x] *= input_1[y*width + x];
 }
 
-__device__ void dispersionFilter(float *outputData,char*commutation_array, int width, int height){
+__device__ void dispersionFilter(unsigned char*input, unsigned char *outputData,char*commutation_array, int width, int height){
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+    unsigned int id = y * width + x;
 
-    unsigned int id = y*width+x;
-    
-    float xstep = 1.0f / width, ystep = 1.0f / height;
-    float u = x * xstep, v = y * ystep;
-
-    if(x > 0 && y > 0 && x < width-1 && y < height-1){
-        outputData[id] = tex2D(tex, u+xstep*commutation_array[id], v+ystep*commutation_array[id+1]);
-    }else outputData[id] = tex2D(tex, u,v);
+    if(x > 1 && y > 1 && x < width-2 && y < height-2){
+        //tex2D(tex, u+xstep*commutation_array[id], v+ystep*commutation_array[id+1]);
+        unsigned int index = 3 * ((y+commutation_array[id+1])*width + x + commutation_array[id]);
+        if(id == 2*width+15)printf("cuda print: %d %d %d\n", outputData[id+0], outputData[id+1], outputData[id+2]);
+        outputData[3*id+0] = input[index+0];
+        outputData[3*id+1] = input[index+1];
+        outputData[3*id+2] = input[index+2];
+        if(id == 2*width+15)printf("cuda print: %d %d %d\n", outputData[3*id+0], outputData[3*id+1], outputData[3*id+2]);
+    }else outputData[3*id] = input[3*id];
 }
 
 __global__ void applyFilters(unsigned char *input, unsigned char *outputData, char*commutation_array, int width, int height){
-    //dispersionFilter(input,commutation_array, width, height);
-    /*__syncthreads();
-    medianFilter(input, outputData, width, height);
+    dispersionFilter(input, outputData,commutation_array, width, height);
+    //__syncthreads();
+    /*medianFilter(input, outputData, width, height);
     __syncthreads();
     sobelFilter(outputData, input, width, height);//result of sobel in input
     __syncthreads();
@@ -130,10 +122,13 @@ int main(int argc, char **argv){
     findCudaDevice(argc, (const char **) argv);
     srand(time(NULL));
     bool continuer = true;
-    int width = 0, height = 0, window = 3;
+    int width = 0, height = 0, window = 5;
     cv::VideoCapture cam(0); cv::Mat img;
     unsigned char*data = NULL, *devData = NULL, *devBuffer = NULL;
     cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;//getting size of the frame
+
+    dim3 dimBlock(8, 8, 1);
+    dim3 dimGrid(width / dimBlock.x, height / dimBlock.y, 1);
     
     checkCudaErrors(cudaMalloc((void**) &devData, 3*(width*height) * sizeof(char)));
     checkCudaErrors(cudaMalloc((void**) &devBuffer, 3*(width*height) * sizeof(char)));
@@ -141,16 +136,21 @@ int main(int argc, char **argv){
     checkCudaErrors(cudaMalloc((void**) &devCom, (width*height+1) * sizeof(char)));
 
     while(continuer){
-        getCommutationArray(com, width*height, window);
+        getCommutationArray(com, width*height+1, window);
         cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;
         sendDataToGpu(data, devData, devBuffer, com, devCom, width*height);
         //begin main
         
-        printf("%d %d %d %d\n" , img.at<cv::Vec3b>(0,0).val[0], img.at<cv::Vec3b>(0,0).val[1], img.at<cv::Vec3b>(0,0).val[2], img.at<cv::Vec3b>(0,0).val[4]);
-        printf("%d %d %d %d\n\n" , data[0], data[1], data[2], data[4]);
+        printf("before %d %d %d\n" , data[3*(2*width+15)], data[3*(2*width+15)+1], data[3*(2*width+15)+1]);
+
+        applyFilters<<<dimGrid, dimBlock, 0>>>(devBuffer, devData, devCom, width, height);
 
         //end main
         checkCudaErrors(cudaMemcpy(data, devData, 3*width*height*sizeof(char), cudaMemcpyDeviceToHost));
+        checkCudaErrors(cudaDeviceSynchronize());
+
+        printf("after %d %d %d\n\n" , data[3*(2*width+15)], data[3*(2*width+15)+1], data[3*(2*width+15)+1]);
+
         cv::imshow("test", img);
         if(cv::waitKey(33) == ' ')continuer = false;
     }
