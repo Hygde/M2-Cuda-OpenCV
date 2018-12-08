@@ -110,14 +110,14 @@ __device__ void multiply(unsigned char*input_1, unsigned char*output, int width,
 __device__ void dispersionFilter(unsigned char*input, unsigned char *outputData,char*commutation_array, int window, int width, int height){
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-    unsigned int id = y * width + x;
+    unsigned int id = y * width + x, w_div2 = window/2, arrayId = 3*id;
 
-    if(x > window/2 && y > window/2 && x < width-(window/2) && y < height-(window/2)){
+    if(x > w_div2 && y > w_div2 && x < width-w_div2 && y < height-w_div2){
         unsigned int index = 3 * ((y+commutation_array[id+1])*width + x + commutation_array[id]);
-        outputData[3*id+0] = input[index+0];
-        outputData[3*id+1] = input[index+1];
-        outputData[3*id+2] = input[index+2];
-    }else outputData[3*id] = input[3*id];
+        outputData[arrayId+0] = input[index+0];
+        outputData[arrayId+1] = input[index+1];
+        outputData[arrayId+2] = input[index+2];
+    }else outputData[arrayId] = input[arrayId];
 }
 
 __global__ void applyFilters(unsigned char *input, unsigned char *outputData, char*commutation_array, int window,int width, int height){
@@ -133,7 +133,7 @@ __global__ void applyFilters(unsigned char *input, unsigned char *outputData, ch
 void getCommutationArray(char* arr, int size, unsigned int window){for(int i = 0; i < size; i++)arr[i] = (char)rand()%window - (window/2);}
 
 bool processEvent(bool&continuer, int&window){
-    bool result;
+    bool result = true;
     char carac = cv::waitKey(33);
     switch(carac){
         case 32://spacebar
