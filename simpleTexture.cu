@@ -86,9 +86,14 @@ __device__ void sobelFilter(unsigned char *input, unsigned char *outputData, int
                 index++;
             }
         }
-        outputData[3 * id + 0] = sqrt((b_pixel[0]*b_pixel[0])+(b_pixel[1]*b_pixel[1])) > 128 ? 255 : 0;
-        outputData[3 * id + 1] = sqrt((g_pixel[0]*g_pixel[0])+(g_pixel[1]*g_pixel[1])) > 128 ? 255 : 0;
-        outputData[3 * id + 2] = sqrt((r_pixel[0]*r_pixel[0])+(r_pixel[1]*r_pixel[1])) > 128 ? 255 : 0;
+
+        float b = sqrt((b_pixel[0]*b_pixel[0])+(b_pixel[1]*b_pixel[1]));
+        float g = sqrt((g_pixel[0]*g_pixel[0])+(g_pixel[1]*g_pixel[1]));
+        float r = sqrt((r_pixel[0]*r_pixel[0])+(r_pixel[1]*r_pixel[1]));
+
+        outputData[3 * id + 0] = (b>128)?255:b;
+        outputData[3 * id + 1] = (g>128)?255:g;
+        outputData[3 * id + 2] = (r>128)?255:r;
     }
 }
 
@@ -97,9 +102,9 @@ __device__ void multiply(unsigned char*input_1, unsigned char*output, int width,
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
     unsigned int id = y * width + x;
 
-    output[3 * id + 0] *= input_1[3 * id + 0] / 255;
-    output[3 * id + 1] *= input_1[3 * id + 1] / 255;
-    output[3 * id + 2] *= input_1[3 * id + 2] / 255;
+    output[3 * id + 0] *= input_1[3 * id + 0] / 255.0f;
+    output[3 * id + 1] *= input_1[3 * id + 1] / 255.0f;
+    output[3 * id + 2] *= input_1[3 * id + 2] / 255.0f;
 }
 
 __device__ void dispersionFilter(unsigned char*input, unsigned char *outputData,char*commutation_array, int window, int width, int height){
@@ -120,17 +125,12 @@ __global__ void applyFilters(unsigned char *input, unsigned char *outputData, ch
     __syncthreads();
     medianFilter(outputData, input, window, width, height);
     __syncthreads();
-    sobelFilter(outputData, input, width, height);//result of sobel in input
+    sobelFilter(input, outputData, width, height);//result of sobel in input
     __syncthreads();
     multiply(input, outputData, width, height);//multiply result of sobel with result of median*/
 }
 
 void getCommutationArray(char* arr, int size, unsigned int window){for(int i = 0; i < size; i++)arr[i] = (char)rand()%window - (window/2);}
-
-void sendDataToGpu(unsigned char* data, unsigned char*devData, unsigned char*devBuffer, char*com, char*devCom, int size){
-    checkCudaErrors(cudaMemcpy(devData, data, 3*size*sizeof(char), cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(devBuffer, data, 3*size*sizeof(char), cudaMemcpyHostToDevice));
-}
 
 bool processEvent(bool&continuer, int&window){
     bool result;
@@ -179,13 +179,13 @@ int main(int argc, char **argv){
             checkCudaErrors(cudaMemcpy(devCom, com, (width*height+1)*sizeof(char), cudaMemcpyHostToDevice));
         }
         cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;
-        sendDataToGpu(data, devData, devBuffer, com, devCom, width*height);
+        checkCudaErrors(cudaMemcpy(devData, data, 3*width*height*sizeof(char), cudaMemcpyHostToDevice));
         //begin main
 
         StopWatchInterface *timer = NULL;
         sdkCreateTimer(&timer);
         sdkStartTimer(&timer);
-        applyFilters<<<dimGrid, dimBlock, 0>>>(devBuffer, devData, devCom, window, width, height);
+        applyFilters<<<dimGrid, dimBlock, 0>>>(devData, devBuffer, devCom, window, width, height);
         checkCudaErrors(cudaMemcpy(data, devData, 3*width*height*sizeof(char), cudaMemcpyDeviceToHost));
         sdkStopTimer(&timer);
         printf("Processing time: %f (ms)\r", sdkGetTimerValue(&timer));
