@@ -106,7 +106,7 @@ __device__ void dispersionFilter(float *outputData,char*commutation_array, int w
 }
 
 __global__ void applyFilters(unsigned char *input, unsigned char *outputData, char*commutation_array, int width, int height){
-    dispersionFilter(input,commutation_array, width, height);
+    //dispersionFilter(input,commutation_array, width, height);
     /*__syncthreads();
     medianFilter(input, outputData, width, height);
     __syncthreads();
@@ -117,8 +117,10 @@ __global__ void applyFilters(unsigned char *input, unsigned char *outputData, ch
 
 void getCommutationArray(char* arr, int size, unsigned int window){for(int i = 0; i < size; i++)arr[i] = (char)rand()%window - (window/2);}
 
-void sendDataToGpu(unsigned char* img, unsigned char*devImg){
-    
+void sendDataToGpu(unsigned char* data, unsigned char*devData, unsigned char*devBuffer, char*com, char*devCom, int size){
+    checkCudaErrors(cudaMemcpy(devData, data, 3*size*sizeof(char), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(devBuffer, data, 3*size*sizeof(char), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(devCom, com, (size+1)*sizeof(char), cudaMemcpyHostToDevice));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -130,23 +132,33 @@ int main(int argc, char **argv){
     bool continuer = true;
     int width = 0, height = 0, window = 3;
     cv::VideoCapture cam(0); cv::Mat img;
-    unsigned char*data = NULL, *devDat = NULL;
+    unsigned char*data = NULL, *devData = NULL, *devBuffer = NULL;
     cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;//getting size of the frame
-    char*com = (char*)malloc((width*height+1)*sizeof(char));
+    
+    checkCudaErrors(cudaMalloc((void**) &devData, 3*(width*height) * sizeof(char)));
+    checkCudaErrors(cudaMalloc((void**) &devBuffer, 3*(width*height) * sizeof(char)));
+    char*com = (char*)malloc((width*height+1)*sizeof(char)), *devCom;
+    checkCudaErrors(cudaMalloc((void**) &devCom, (width*height+1) * sizeof(char)));
 
-    //while(continuer){
+    while(continuer){
         getCommutationArray(com, width*height, window);
         cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;
-        printf("%d %d %d\n" , img.at<cv::Vec3b>(0,0).val[0], img.at<cv::Vec3b>(0,0).val[1], img.at<cv::Vec3b>(0,0).val[2]);
-        printf("%d %d %d\n\n" , data[0], data[1], data[2]);
+        sendDataToGpu(data, devData, devBuffer, com, devCom, width*height);
+        //begin main
+        
+        printf("%d %d %d %d\n" , img.at<cv::Vec3b>(0,0).val[0], img.at<cv::Vec3b>(0,0).val[1], img.at<cv::Vec3b>(0,0).val[2], img.at<cv::Vec3b>(0,0).val[4]);
+        printf("%d %d %d %d\n\n" , data[0], data[1], data[2], data[4]);
+
+        //end main
+        checkCudaErrors(cudaMemcpy(data, devData, 3*width*height*sizeof(char), cudaMemcpyDeviceToHost));
+        cv::imshow("test", img);
         if(cv::waitKey(33) == ' ')continuer = false;
-    //}
+    }
 
     cam.release();
     free(com);
+    checkCudaErrors(cudaFree(devData));
+    checkCudaErrors(cudaFree(devBuffer));
+    checkCudaErrors(cudaFree(devCom));
     return 0;
 }
-
-////////////////////////////////////////////////////////////////////////////////
-//! Run a simple test for CUDA
-////////////////////////////////////////////////////////////////////////////////
