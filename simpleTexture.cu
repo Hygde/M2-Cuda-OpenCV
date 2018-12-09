@@ -36,32 +36,33 @@ __device__ void triArray(unsigned char *a, const int size){
     }
 }
 
-__device__ void medianFilter(unsigned char*input, unsigned char *outputData, int window, int width,int height){
+__device__ void medianFilter(unsigned char*input, unsigned char *outputData, unsigned char*devMed, int window, int width,int height){
     // calculate normalized texture coordinates
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-    unsigned int id = y * width + x;
+    unsigned int id = y * width + x, idx3 = 3*id;
+    unsigned int w2 = window*window, arrayId = 3*w2*id;
+    int w_div2 = window/2;
 
     //to find the median -> tri à bulle + valeur du milieu
-    unsigned char b_values[9], g_values[9], r_values[9];//todo: window²
-    if(x > 0 && x < width-1 && y > 0 && y < height -1){
+    if(x > w_div2 && x < width-w_div2 && y > w_div2 && y < height - w_div2){
         int index = 0;
-        for(int i = -1; i < 2; i++){
-            for(int j = -1; j < 2; j++){
-                b_values[index] = input[3 * ((y+j)*width+(x+i)) + 0];
-                g_values[index] = input[3 * ((y+j)*width+(x+i)) + 1];
-                r_values[index] = input[3 * ((y+j)*width+(x+i)) + 2];
+        for(int i = -w_div2; i <= w_div2; i++){
+            for(int j = -w_div2; j <= w_div2; j++){
+                devMed[arrayId + index] = input[3 * ((y+j)*width+(x+i)) + 0];
+                devMed[arrayId + w2 + index] = input[3 * ((y+j)*width+(x+i)) + 1];
+                devMed[arrayId + 2*w2 + index] = input[3 * ((y+j)*width+(x+i)) + 2];
                 index++;
             }
         }
-        triArray(b_values, 9);triArray(g_values, 9);triArray(r_values, 9);
-        outputData[3 * id + 0] = b_values[4];//apply median
-        outputData[3 * id + 1] = g_values[4];
-        outputData[3 * id + 2] = r_values[4];
+        triArray(&devMed[arrayId], w2);triArray(&devMed[arrayId + w2], w2);triArray(&devMed[arrayId + 2*w2], w2);
+        outputData[idx3 + 0] = devMed[arrayId + (w2/2)];//apply median
+        outputData[idx3 + 1] = devMed[arrayId + w2 + (w2/2)];
+        outputData[idx3 + 2] = devMed[arrayId + 2*w2 + (w2/2)];
     }else{//copy
-        outputData[3 * id + 0] =  input[3 * id + 0];
-        outputData[3 * id + 1] =  input[3 * id + 0];
-        outputData[3 * id + 2] =  input[3 * id + 0];
+        outputData[idx3 + 0] =  input[idx3 + 0];
+        outputData[idx3 + 1] =  input[idx3 + 0];
+        outputData[idx3 + 2] =  input[idx3 + 0];
     }
 }
 
@@ -110,20 +111,20 @@ __device__ void multiply(unsigned char*input_1, unsigned char*output, int width,
 __device__ void dispersionFilter(unsigned char*input, unsigned char *outputData,char*commutation_array, int window, int width, int height){
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-    unsigned int id = y * width + x;
+    unsigned int id = y * width + x, w_div2 = window/2, arrayId = 3*id;
 
-    if(x > window/2 && y > window/2 && x < width-(window/2) && y < height-(window/2)){
+    if(x > w_div2 && y > w_div2 && x < width-w_div2 && y < height-w_div2){
         unsigned int index = 3 * ((y+commutation_array[id+1])*width + x + commutation_array[id]);
-        outputData[3*id+0] = input[index+0];
-        outputData[3*id+1] = input[index+1];
-        outputData[3*id+2] = input[index+2];
-    }else outputData[3*id] = input[3*id];
+        outputData[arrayId+0] = input[index+0];
+        outputData[arrayId+1] = input[index+1];
+        outputData[arrayId+2] = input[index+2];
+    }else outputData[arrayId] = input[arrayId];
 }
 
-__global__ void applyFilters(unsigned char *input, unsigned char *outputData, char*commutation_array, int window,int width, int height){
+__global__ void applyFilters(unsigned char *input, unsigned char *outputData, char*commutation_array, unsigned char*devMed, int window,int width, int height){
     dispersionFilter(input, outputData,commutation_array, window, width, height);
     __syncthreads();
-    medianFilter(outputData, input, window, width, height);
+    medianFilter(outputData, input, devMed, window, width, height);
     __syncthreads();
     sobelFilter(input, outputData, width, height);//result of sobel in input
     __syncthreads();
@@ -133,14 +134,14 @@ __global__ void applyFilters(unsigned char *input, unsigned char *outputData, ch
 void getCommutationArray(char* arr, int size, unsigned int window){for(int i = 0; i < size; i++)arr[i] = (char)rand()%window - (window/2);}
 
 bool processEvent(bool&continuer, int&window){
-    bool result;
+    bool result = true;
     char carac = cv::waitKey(33);
     switch(carac){
         case 32://spacebar
             continuer = false;
         break;
         case 82://up
-            window += 2;
+            window = (window < 11) ? window+2 : 11;
             printf("window size = %dx%d \n",window, window);
         break;
         case 84://down
@@ -161,7 +162,7 @@ int main(int argc, char **argv){
     bool continuer = true, config = true;
     int width = 0, height = 0, window = 5;
     cv::VideoCapture cam(0); cv::Mat img;
-    unsigned char*data = NULL, *devData = NULL, *devBuffer = NULL;
+    unsigned char*data = NULL, *devData = NULL, *devBuffer = NULL, *devMed = NULL;
     cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;//getting size of the frame
 
     dim3 dimBlock(8, 8, 1);
@@ -169,6 +170,7 @@ int main(int argc, char **argv){
     
     checkCudaErrors(cudaMalloc((void**) &devData, 3*(width*height) * sizeof(char)));
     checkCudaErrors(cudaMalloc((void**) &devBuffer, 3*(width*height) * sizeof(char)));
+    checkCudaErrors(cudaMalloc((void**) &devMed, 3*window*window*(width*height) * sizeof(char)));
     char*com = (char*)malloc((width*height+1)*sizeof(char)), *devCom;
     checkCudaErrors(cudaMalloc((void**) &devCom, (width*height+1) * sizeof(char)));
 
@@ -177,6 +179,8 @@ int main(int argc, char **argv){
             config = false;
             getCommutationArray(com, width*height+1, window);
             checkCudaErrors(cudaMemcpy(devCom, com, (width*height+1)*sizeof(char), cudaMemcpyHostToDevice));
+            checkCudaErrors(cudaFree(devMed));
+            checkCudaErrors(cudaMalloc((void**) &devMed, 3*window*window*(width*height) * sizeof(char)));
         }
         cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;
         checkCudaErrors(cudaMemcpy(devData, data, 3*width*height*sizeof(char), cudaMemcpyHostToDevice));
@@ -185,10 +189,10 @@ int main(int argc, char **argv){
         StopWatchInterface *timer = NULL;
         sdkCreateTimer(&timer);
         sdkStartTimer(&timer);
-        applyFilters<<<dimGrid, dimBlock, 0>>>(devData, devBuffer, devCom, window, width, height);
+        applyFilters<<<dimGrid, dimBlock, 0>>>(devData, devBuffer, devCom, devMed, window, width, height);
         checkCudaErrors(cudaMemcpy(data, devData, 3*width*height*sizeof(char), cudaMemcpyDeviceToHost));
         sdkStopTimer(&timer);
-        printf("Processing time: %f (ms)\r", sdkGetTimerValue(&timer));
+        printf("Processing time: %f (ms)\r\n", sdkGetTimerValue(&timer));
 
         //end main
 
@@ -200,6 +204,7 @@ int main(int argc, char **argv){
     free(com);
     checkCudaErrors(cudaFree(devData));
     checkCudaErrors(cudaFree(devBuffer));
+    checkCudaErrors(cudaFree(devMed));
     checkCudaErrors(cudaFree(devCom));
     return 0;
 }
