@@ -153,15 +153,10 @@ bool processEvent(bool&continuer, int&window){
     return result;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Program main
-////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv){
-    findCudaDevice(argc, (const char **) argv);
-    srand(time(NULL));
+void run(cv::VideoCapture&cam){
+    cv::Mat img;
     bool continuer = true, config = true;
     int width = 0, height = 0, window = 5;
-    cv::VideoCapture cam(0); cv::Mat img;
     unsigned char*data = NULL, *devData = NULL, *devBuffer = NULL, *devMed = NULL;
     cam >> img; width = img.cols; height = img.rows; data = (unsigned char*)img.data;//getting size of the frame
 
@@ -200,11 +195,18 @@ int main(int argc, char **argv){
         config = processEvent(continuer, window);
     }
 
+    
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Program main
+////////////////////////////////////////////////////////////////////////////////
+int main(int argc, char **argv){
+    findCudaDevice(argc, (const char **) argv);
+    srand(time(NULL));
+    cv::VideoCapture cam(0);
+    int result = cam.isOpened();
+    if(result)run(cam);
     cam.release();
-    free(com);
-    checkCudaErrors(cudaFree(devData));
-    checkCudaErrors(cudaFree(devBuffer));
-    checkCudaErrors(cudaFree(devMed));
-    checkCudaErrors(cudaFree(devCom));
-    return 0;
+    return result;
 }
