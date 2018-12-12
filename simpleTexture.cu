@@ -92,9 +92,9 @@ __device__ void sobelFilter(unsigned char *input, unsigned char *outputData, int
         float g = sqrt((g_pixel[0]*g_pixel[0])+(g_pixel[1]*g_pixel[1]));
         float r = sqrt((r_pixel[0]*r_pixel[0])+(r_pixel[1]*r_pixel[1]));
 
-        outputData[3 * id + 0] = (b>128)?255:b;
-        outputData[3 * id + 1] = (g>128)?255:g;
-        outputData[3 * id + 2] = (r>128)?255:r;
+        outputData[3 * id + 0] = (b>128)?0:255;
+        outputData[3 * id + 1] = (g>128)?0:255;
+        outputData[3 * id + 2] = (r>128)?0:255;
     }
 }
 
@@ -128,7 +128,7 @@ __global__ void applyFilters(unsigned char *input, unsigned char *outputData, ch
     __syncthreads();
     sobelFilter(input, outputData, width, height);//result of sobel in input
     __syncthreads();
-    multiply(input, outputData, width, height);//multiply result of sobel with result of median*/
+    multiply(outputData, input, width, height);//multiply result of sobel with result of median*/
 }
 
 void getCommutationArray(char* arr, int size, unsigned int window){for(int i = 0; i < size; i++)arr[i] = (char)rand()%window - (window/2);}
